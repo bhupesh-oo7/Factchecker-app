@@ -608,7 +608,7 @@ def main():
                                 > {ev.get('snippet', 'No snippet available')[:300]}
                                 """)
                                 if ev.get('url'):
-                                    st.markdown(f"<a href="{ev['url']}" target="_blank" class="source-link">🔗 View Source</a>", unsafe_allow_html=True)
+                                    st.markdown(f'<a href="{ev["url"]}" target="_blank" class="source-link">🔗 View Source</a>',unsafe_allow_html=True)
                                 st.markdown("---")
 
             # Export option
@@ -644,7 +644,7 @@ def main():
         ]
 
         for sc in sample_claims:
-            st.markdown(f"- **{sc['type'].title()}**: "{sc['text']}" → *Value to verify: {sc['value']}*")
+            st.markdown(f'- **{sc["type"].title()}**: "{sc["text"]}" → *Value to verify: {sc["value"]}*')
 
         st.markdown("---")
         st.subheader("📋 Supported Claim Types")

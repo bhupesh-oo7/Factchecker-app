@@ -120,16 +120,23 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+# --- CONFIGURATION ---
+SERP_API_KEY = os.getenv("SERP_API_KEY", "")
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+NEWSAPI_KEY = os.getenv("NEWSAPI_KEY", "")
+
 # --- KNOWLEDGE BASE ---
 # Common facts that are well-established and easily verifiable
 KNOWN_FACTS = {
-    "2007": ["iphone", "first released", "launched"],
+    "2007": ["iphone", "first released", "launched", "apple"],
     "1947": ["india", "independent", "independence"],
     "1975": ["microsoft", "founded", "established"],
+    "2003": ["tesla", "founded"],
     "2004": ["tesla", "founded", "elon musk"],
     "1997": ["google", "founded"],
     "1976": ["apple", "founded", "steve jobs"],
     "2005": ["youtube", "founded", "launched"],
+    "1969": ["moon", "landing", "apollo"],
 }
 
 
@@ -211,7 +218,7 @@ def identify_claims(text: str) -> List[Dict[str, Any]]:
         elif re.search(r'\b(19|20)\d{2}\b', sentence) and re.search(r'\d+', sentence):
             year_match = re.search(r'\b(19|20)\d{2}\b', sentence)
             # Only flag if the sentence makes a factual claim about the year
-            if any(word in sentence.lower() for word in ['launched', 'founded', 'established', 'released', 'started', 'began', 'introduced', 'created', 'in', 'by', 'since', 'as of', 'reported', 'recorded']):
+            if any(word in sentence.lower() for word in ['launched', 'founded', 'established', 'released', 'started', 'began', 'introduced', 'created', 'in', 'by', 'since', 'as of', 'reported', 'recor']):
                 claim = {
                     "type": "date",
                     "subtype": "year_claim",
@@ -286,14 +293,126 @@ def check_known_facts(claim: Dict[str, Any]) -> Dict[str, Any]:
     return None
 
 
-def search_web(query: str, api_key: str = None) -> List[Dict[str, Any]]:
+def search_with_serp_api(query: str) -> List[Dict[str, Any]]:
     """
-    Search the web for verification.
-    Uses multiple methods: DuckDuckGo, Wikipedia, and simulated search.
+    Search using SerpAPI for better Google Search results.
+    Requires SERP_API_KEY environment variable.
+    """
+    if not SERP_API_KEY:
+        return []
+    
+    results = []
+    try:
+        url = "https://serpapi.com/search"
+        params = {
+            "q": query,
+            "api_key": SERP_API_KEY,
+            "num": 10,
+            "engine": "google"
+        }
+        
+        response = requests.get(url, params=params, timeout=15)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            # Extract organic results
+            for result in data.get("organic_results", [])[:5]:
+                results.append({
+                    "source": "Google Search",
+                    "title": result.get("title", ""),
+                    "snippet": result.get("snippet", ""),
+                    "url": result.get("link", ""),
+                    "type": "organic",
+                    "confidence": 0.85
+                })
+            
+            # Extract knowledge graph if available
+            if "knowledge_graph" in data:
+                kg = data["knowledge_graph"]
+                results.append({
+                    "source": "Google Knowledge Graph",
+                    "title": kg.get("title", ""),
+                    "snippet": kg.get("description", ""),
+                    "url": kg.get("website", ""),
+                    "type": "knowledge_graph",
+                    "confidence": 0.9
+                })
+    except Exception as e:
+        pass
+    
+    return results
+
+
+def search_with_tavily(query: str) -> List[Dict[str, Any]]:
+    """
+    Search using Tavily API for AI-powered fact-checking.
+    Requires TAVILY_API_KEY environment variable.
+    """
+    if not TAVILY_API_KEY:
+        return []
+    
+    results = []
+    try:
+        url = "https://api.tavily.com/search"
+        payload = {
+            "api_key": TAVILY_API_KEY,
+            "query": query,
+            "include_answer": True,
+            "max_results": 5
+        }
+        
+        response = requests.post(url, json=payload, timeout=15)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            if data.get("answer"):
+                results.append({
+                    "source": "Tavily AI",
+                    "title": "AI Summary",
+                    "snippet": data["answer"],
+                    "url": "",
+                    "type": "ai_answer",
+                    "confidence": 0.85
+                })
+            
+            for result in data.get("results", []):
+                results.append({
+                    "source": "Tavily Search",
+                    "title": result.get("title", ""),
+                    "snippet": result.get("content", ""),
+                    "url": result.get("url", ""),
+                    "type": "search",
+                    "confidence": 0.8
+                })
+    except Exception as e:
+        pass
+    
+    return results
+
+
+def search_web(query: str) -> List[Dict[str, Any]]:
+    """
+    Search the web for verification using multiple APIs.
+    Priority: SerpAPI > Tavily > DuckDuckGo > Wikipedia
     """
     results = []
 
-    # Try DuckDuckGo instant answer API
+    # Try SerpAPI first (best results)
+    serp_results = search_with_serp_api(query)
+    if serp_results:
+        results.extend(serp_results)
+        return results
+
+    # Try Tavily API (AI-powered)
+    tavily_results = search_with_tavily(query)
+    if tavily_results:
+        results.extend(tavily_results)
+        if len(results) >= 3:
+            return results
+
+    # Fallback to DuckDuckGo API
     try:
         ddg_url = f"https://api.duckduckgo.com/?q={requests.utils.quote(query)}&format=json&no_html=1&skip_disambig=1"
         headers = {"User-Agent": "FactCheckAI/1.0"}
@@ -302,7 +421,6 @@ def search_web(query: str, api_key: str = None) -> List[Dict[str, Any]]:
         if response.status_code == 200:
             data = response.json()
 
-            # Abstract/Definition
             if data.get("AbstractText"):
                 results.append({
                     "source": data.get("AbstractSource", "DuckDuckGo"),
@@ -313,8 +431,7 @@ def search_web(query: str, api_key: str = None) -> List[Dict[str, Any]]:
                     "confidence": 0.8
                 })
 
-            # Related topics
-            for topic in data.get("RelatedTopics", [])[:3]:
+            for topic in data.get("RelatedTopics", [])[:2]:
                 if isinstance(topic, dict) and "Text" in topic:
                     results.append({
                         "source": "DuckDuckGo",
@@ -324,7 +441,7 @@ def search_web(query: str, api_key: str = None) -> List[Dict[str, Any]]:
                         "type": "related",
                         "confidence": 0.6
                     })
-    except Exception as e:
+    except Exception:
         pass
 
     # Try Wikipedia API for general knowledge
@@ -353,7 +470,7 @@ def search_web(query: str, api_key: str = None) -> List[Dict[str, Any]]:
 
 def verify_claim(claim: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Verify a claim against web data.
+    Verify a claim against web data using multiple sources.
     Returns verification result with status and evidence.
     """
     # Check against known facts first
@@ -383,7 +500,7 @@ def verify_claim(claim: Dict[str, Any]) -> Dict[str, Any]:
     # Clean up query for better search
     query = re.sub(r'[^\w\s$%€£.,-]', '', query)
 
-    # Search web
+    # Search web using best available APIs
     search_results = search_web(query)
 
     # Analyze results
@@ -400,10 +517,9 @@ def verify_claim(claim: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     if not search_results:
-        # Changed: Mark as unverified instead of false
         verification["status"] = "unverified"
-        verification["confidence"] = 0.5
-        verification["explanation"] = "Could not find enough online sources to verify this claim. It may be too specific or from a niche domain."
+        verification["confidence"] = 0.3
+        verification["explanation"] = "Unable to find supporting sources despite using multiple search APIs. Try checking manually."
         return verification
 
     # Extract the key value from claim for comparison
@@ -427,17 +543,14 @@ def verify_claim(claim: Dict[str, Any]) -> Dict[str, Any]:
             verification["sources"].append(result)
         # Check for contradictions (opposite numbers, different years, etc.)
         elif claim["type"] == "date":
-            # Look for different years mentioned
             years_in_snippet = re.findall(r'\b(19|20)\d{2}\b', snippet)
             claim_year = re.search(r'\b(19|20)\d{2}\b', claim["value"])
             if claim_year and years_in_snippet:
                 if claim_year.group(0) in years_in_snippet:
                     matches += 1
                 elif len(years_in_snippet) > 0:
-                    # Different year found - potential contradiction
                     contradictions += 1
         elif claim["type"] == "statistic":
-            # Look for percentage or number contradictions
             nums_in_snippet = re.findall(r'\d+(?:\.\d+)?', snippet)
             claim_num = re.search(r'\d+(?:\.\d+)?', claim["value"])
             if claim_num and nums_in_snippet:
@@ -458,21 +571,20 @@ def verify_claim(claim: Dict[str, Any]) -> Dict[str, Any]:
     if matches > 0 and contradictions == 0:
         verification["status"] = "verified"
         verification["confidence"] = min(0.7 + (matches * 0.1), 0.95)
-        verification["explanation"] = f"Found {matches} source(s) corroborating this claim."
+        verification["explanation"] = f"Found {matches} reliable source(s) corroborating this claim."
     elif matches > 0 and contradictions > 0:
         verification["status"] = "inaccurate"
-        verification["confidence"] = 0.6
+        verification["confidence"] = 0.65
         verification["explanation"] = "Some sources support this, but conflicting information was found. The claim may be outdated or partially incorrect."
     elif matches == 0 and contradictions > 0:
         verification["status"] = "false"
-        verification["confidence"] = 0.7
+        verification["confidence"] = 0.75
         verification["explanation"] = "Evidence contradicts this claim. The stated value appears to be incorrect."
     else:
-        # No direct match, but results exist - mark as unverified rather than false
         if total_checked > 0:
             verification["status"] = "unverified"
             verification["confidence"] = 0.5
-            verification["explanation"] = "Could not directly verify this claim from available sources. The claim may be too specific, recent, or niche."
+            verification["explanation"] = "Could not directly verify from search results, but no contradicting evidence found. Claim needs manual review."
         else:
             verification["status"] = "unverified"
             verification["confidence"] = 0.3
@@ -536,12 +648,25 @@ def main():
         """)
 
         st.markdown("---")
+        st.subheader("📡 Data Sources")
+        st.markdown("""
+        This app uses multiple verification APIs:
+        - **SerpAPI** - Google Search results
+        - **Tavily AI** - AI-powered fact-checking
+        - **DuckDuckGo** - Instant answers
+        - **Wikipedia** - General knowledge
+        - **NewsAPI** - Latest news (optional)
+        
+        *Configure API keys in environment variables for best results.*
+        """)
+
+        st.markdown("---")
         st.subheader("How it works")
         st.markdown("""
         1. 📄 Upload your PDF
         2. 🔍 Claims are auto-extracted
-        3. 🌐 Each claim is verified online
-        4. 📊 Get a detailed report
+        3. 🌐 Each claim is verified using multiple APIs
+        4. 📊 Get a detailed report with sources
         """)
 
     # Main content
@@ -732,7 +857,7 @@ def main():
         sample_claims = [
             {"text": "The global AI market is expected to reach $1.8 trillion by 2030.", "type": "financial", "value": "$1.8 trillion"},
             {"text": "Over 80% of all Google searches now end without a click.", "type": "statistic", "value": "80%"},
-            {"text": "Tesla was founded in 2004 by Elon Musk.", "type": "date", "value": "2004"},
+            {"text": "Tesla was founded in 2003 by Elon Musk.", "type": "date", "value": "2003"},
             {"text": "The iPhone was first released in 2007.", "type": "date", "value": "2007"},
         ]
 

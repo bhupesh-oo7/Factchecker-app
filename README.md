@@ -46,15 +46,4 @@ streamlit run app.py
 - ⚠️ **Inaccurate**: Conflicting or outdated information found
 - ❌ **False**: No supporting evidence found
 
-## 📝 Notes
 
-- Uses DuckDuckGo API for free web search (no API key required)
-- Rate limiting is implemented to respect search APIs
-- For best results, use documents with clear, specific claims
-
-## 🎥 Demo
-
-[Add demo video link here]
-
----
-Built for CogDigital Product Management Assessment
